@@ -286,7 +286,11 @@
   // Never cached to localStorage — it must not linger on a signed-out machine.
   async function pullRates() {
     const id = BOX_CONFIG.ratesFileId;
-    if (!id || /PASTE/.test(id)) throw new Error('rates file id not configured');
+    if (!id || /PASTE/.test(id)) {
+      if (Box.resolveNote) throw new Error(Box.resolveNote);
+      const names = Box.folderNames ? ' Folder currently contains: ' + (Box.folderNames.join(', ') || '(no files)') + '.' : '';
+      throw new Error('rates.json was not found at the TOP level of the SRM Box folder (402841290685). Upload it there with the exact name rates.json.' + names);
+    }
     const res = await boxFetch('/files/' + id + '/content');
     if (!res.ok) throw new Error('rates pull failed: ' + res.status);
     return JSON.parse(await res.text());
@@ -340,6 +344,11 @@
       if (!rp || (lp.updatedAt || '') >= (rp.updatedAt || '')) all[id] = lp;
     });
     out.projects = all;
+    // SRM free-entry leader directory: union by id so names entered on any
+    // machine survive the merge.
+    const lseen = {};
+    [...(remote.leaders || []), ...(local.leaders || [])].forEach(l => { if (l && l.id) lseen[l.id] = l; });
+    out.leaders = Object.values(lseen);
     // Union the append-only activity logs by id, keep most recent 500.
     const seen = {};
     [...(remote.activity || []), ...(local.activity || [])].forEach(e => {
@@ -576,8 +585,9 @@
     let missing = Object.keys(ID_NAMES).filter(k => !BOX_CONFIG[k]);
     if (!missing.length) return;
     const res = await boxFetch('/folders/' + BOX_CONFIG.folderId + '/items?fields=name&limit=1000');
-    if (!res.ok) { console.warn('SRM folder listing failed', res.status); return; }
+    if (!res.ok) { console.warn('SRM folder listing failed', res.status); Box.resolveNote = 'Could not list the SRM Box folder (HTTP ' + res.status + ') — check you have access to folder 402841290685'; return; }
     const items = ((await res.json()).entries || []).filter(it => it.type === 'file');
+    Box.folderNames = items.map(it => it.name);
     for (const k of missing) {
       const hit = items.find(it => it.name.toLowerCase() === ID_NAMES[k]);
       if (hit) { BOX_CONFIG[k] = hit.id; cache[k] = hit.id; continue; }
