@@ -47,11 +47,11 @@
     clientSecret: '',                     // NEVER in the browser for prod — use the serverless exchange. Empty here on purpose.
     redirectUri: window.location.origin + '/oauth-callback.html',
     tokenExchangeUrl: '/api/box-token',   // your Vercel serverless function (holds the secret)
-    dataFileId: '',                       // projects.json — auto-resolved by NAME in the SRM Box folder (created if missing)
-    ratesFileId: '',                      // rates.json — auto-resolved by name; UPLOAD SRM's rate grid to the folder
-    studioFileId: '',                     // studio.json — auto-resolved by name (created if missing)
+    dataFileId: '2366519636815',          // projects.json in the SRM Box folder (pinned by id)
+    ratesFileId: '2366448001998',        // rates.json in the SRM Box folder (pinned by id)
+    studioFileId: '2366533960397',        // studio.json in the SRM Box folder (pinned by id)
     actualsFileId: '',                    // paylocity-actuals.csv in Box — hours by user×project×month. '' = not configured (page falls back to manual drop / API proxy)
-    staffFileId: '',                      // staff.json — auto-resolved by name (created if missing) — the LIVING staffing matrix (allocations + notes + actuals + mappings), shared by all admins
+    staffFileId: '2366528709461',         // staff.json in the SRM Box folder (pinned by id) — the LIVING staffing matrix (allocations + notes + actuals + mappings), shared by all admins
     folderId: '402841290685',             // the SRM Box folder — savillsamericas.app.box.com/folder/402841290685
     pushDebounceMs: 1500,
 
