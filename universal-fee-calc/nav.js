@@ -22,6 +22,7 @@
     { href: 'Proposal Analytics.html',        label: 'Proposal Analytics',  group: 'Manage' },
     { href: 'Data Entry Status.html',        label: 'Data Entry Status',   group: 'Manage' },
     { href: 'Import Revenues.html',          label: 'Import Revenues',     group: 'Admin', admin: true },
+    { href: 'Client Setup.html',             label: 'Client Setup',        group: 'Admin', admin: true },
     { href: 'Rate Grid Reconciliation.html', label: 'Rate Reconciliation', group: 'Admin', admin: true },
   ];
   const NAVY = '#25273A', YEL = '#2FA3B4', TEAL = '#238291';   // SRM accent: brand-book teal
