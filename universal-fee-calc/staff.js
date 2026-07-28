@@ -700,7 +700,7 @@
       const pid = k.slice(0, i1), proj = k.slice(i1 + 1, i2), ym = k.slice(i2 + 1);
       if (!inWin.has(ym)) return;
       const person = db.people[pid];
-      const rate = person ? costRateForTitle(person.title) : null;
+      const rate = person ? costRateForPerson(person, ym) : null;
       if (!rate) { noRate.add(person ? (person.name + (person.title ? ' — ' + person.title : ' — no title')) : pid.replace(/^unmatched:/, '')); return; }
       if (isMacroProject(proj)) {
         overhead.byMonth[ym] = (overhead.byMonth[ym] || 0) + h * rate;
@@ -816,6 +816,31 @@
     return (tier && tier.costFloor) || null;
   }
   function personCostRate(person) { return person ? costRateForTitle(person.title) : null; }
+
+  /* ---------- dollars: real payroll cost (future-ready, not populated yet) ----------
+     No Paylocity API is wired up yet — actuals import (analyzePaylocity, below)
+     only carries hours + job title, never compensation. This is the plug-in
+     point for when real pay-rate data becomes available (API or a richer CSV
+     export): a per-person rate HISTORY (comp changes over time, so historical
+     actuals cost at the rate in effect then), each entry optionally carrying a
+     burden/loading multiplier for a fully-loaded cost instead of gross wages.
+       person.payRates = [{ effectiveDate: 'YYYY-MM-DD', rate, burdenMultiplier }]
+     Shape is provisional — revisit once a real export/API contract exists. */
+  function costRateForPerson(person, ym) {
+    if (!person) return null;
+    const history = Array.isArray(person.payRates) ? person.payRates : [];
+    if (history.length) {
+      const cutoff = ym ? ym + '-28' : null;   // ym is 'YYYY-MM'; compare against month-end
+      const eligible = history.filter(r => !cutoff || !r.effectiveDate || r.effectiveDate <= cutoff)
+        .sort((a, b) => (b.effectiveDate || '').localeCompare(a.effectiveDate || ''));
+      const current = eligible[0] || history[0];
+      if (current && isFinite(parseFloat(current.rate))) {
+        return parseFloat(current.rate) * (parseFloat(current.burdenMultiplier) || 1);
+      }
+    }
+    // No real pay-rate on file yet — fall back to the rate-card floor proxy.
+    return costRateForTitle(person.title);
+  }
 
   /* ---------- macro / non-client time ----------
      "SRM", "Macro" — General Non-Billable Work, Business Development: hours
@@ -1094,7 +1119,7 @@
     // paylocity
     analyzePaylocity, commitPaylocity, clearActuals, resolvePaylocityProject,
     getMappings, setUserMapping, setProjectMapping, setFeeMapping, setTitleMapping, tokenScore,
-    titleFamily, costRateForTitle, personCostRate, macroHours, isMacroProject, profitability,
+    titleFamily, costRateForTitle, personCostRate, costRateForPerson, macroHours, isMacroProject, profitability,
     setLateness, getLateness, setUserExclusion, userExcluded, applyPaylocityTitles,
     proposeCanonical, commitRenames, parseCsvRows: parseCsv,
     // helpers
