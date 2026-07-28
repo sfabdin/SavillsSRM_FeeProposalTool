@@ -477,6 +477,9 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
     <div class="grow">
       <input type="search" id="search-input" placeholder="Search by project, client, lead…">
     </div>
+    <select class="filter-chip" id="filter-client">
+      <option value="">All clients</option>
+    </select>
     <select class="filter-chip" id="filter-status">
       <option value="">All statuses</option>
     </select>
@@ -517,14 +520,17 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
   const CATALOG = window.RATES_CATALOG;
 
   /* ---------- State ---------- */
-  let filters = {
-    search: '',
-    status: '',
-    industry: '',
-    ptype: '',
-    lead: '',
-  };
+  const EMPTY_FILTERS = { search: '', client: '', status: '', industry: '', ptype: '', lead: '' };
+  let filters = { ...EMPTY_FILTERS };
   let sort = { col: 'updatedAt', dir: 'desc' };
+
+  /* Resolved client label: prefer the real Client entity, fall back to the
+     legacy free-text string for projects not yet reconciled to a clientId. */
+  function clientLabel(p) {
+    const pj = p.project || {};
+    const c = pj.clientId ? STORE.clientById(pj.clientId) : null;
+    return (c && c.name) || pj.client || '—';
+  }
 
   /* ---------- Helpers ---------- */
   function $(s, r = document) { return r.querySelector(s); }
@@ -590,6 +596,7 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
 
   /* ---------- Populate filter dropdowns ---------- */
   function populateFilters(projects) {
+    const clientSel = $('#filter-client');
     const statusSel = $('#filter-status');
     const indSel = $('#filter-industry');
     const ptSel = $('#filter-ptype');
@@ -597,6 +604,11 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
 
     // Build options (preserve current selections)
     const curStatus = filters.status, curInd = filters.industry, curLead = filters.lead;
+    if (clientSel) {
+      const curClient = filters.client;
+      clientSel.innerHTML = '<option value="">All clients</option>' +
+        STORE.listClients().map(c => `<option value="${c.id}" ${c.id===curClient?'selected':''}>${esc(c.name)}</option>`).join('');
+    }
     statusSel.innerHTML = '<option value="">All statuses</option>' +
       STORE.STATUSES.map(s => `<option value="${s}" ${s===curStatus?'selected':''}>${STORE.STATUS_LABELS[s]}</option>`).join('');
 
@@ -670,18 +682,19 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
         : `Showing only projects led or owned by <strong>${esc(cur.name || '—')}</strong>. Other teams' fees are hidden.`;
     }
     const exit = document.getElementById('id-exit');
-    if (exit) exit.addEventListener('click', (e) => { e.preventDefault(); STORE.clearImpersonation(); filters = { search: '', status: '', industry: '', ptype: '', lead: '' }; render(); });
+    if (exit) exit.addEventListener('click', (e) => { e.preventDefault(); STORE.clearImpersonation(); filters = { ...EMPTY_FILTERS }; render(); });
   }
   function applyFilters(projects) {
     return projects.filter(p => {
       const pj = p.project || {};
+      if (filters.client && pj.clientId !== filters.client) return false;
       if (filters.status && pj.status !== filters.status) return false;
       if (filters.industry && pj.industry !== filters.industry) return false;
       if (filters.ptype && pj.projectType !== filters.ptype) return false;
       if (filters.lead && pj.lead !== filters.lead) return false;
       if (filters.search) {
         const q = filters.search.toLowerCase();
-        const hay = [pj.name, pj.client, pj.lead, pj.location, pj.clientContact, pj.clientRelOwner]
+        const hay = [pj.name, clientLabel(p), pj.lead, pj.location, pj.clientContact, pj.clientRelOwner]
           .filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -695,7 +708,7 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
       let av, bv;
       switch (sort.col) {
         case 'name': av = a.project?.name || ''; bv = b.project?.name || ''; break;
-        case 'client': av = a.project?.client || ''; bv = b.project?.client || ''; break;
+        case 'client': av = clientLabel(a); bv = clientLabel(b); break;
         case 'status': av = a.project?.status || ''; bv = b.project?.status || ''; break;
         case 'industry': av = a.project?.industry || ''; bv = b.project?.industry || ''; break;
         case 'lead': av = a.project?.lead || ''; bv = b.project?.lead || ''; break;
@@ -834,7 +847,7 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
     }
 
     const cols = [
-      { key: 'name',      label: 'Project' },
+      { key: 'name',      label: 'Work Order' },
       { key: 'client',    label: 'Client · location' },
       { key: 'status',    label: 'Status' },
       { key: 'industry',  label: 'Industry' },
@@ -877,7 +890,7 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
           <div class="pname">${esc(pj.name || 'Untitled')}${nameSub}</div>
         </td>
         <td>
-          <div class="pclient">${esc(pj.client || '—')}</div>
+          <div class="pclient">${esc(clientLabel(p))}</div>
           <div class="pclient-sub">${esc(pj.location || '')}</div>
         </td>
         <td><span class="pill status-${statusKey}">${esc(statusLabel)}</span></td>
@@ -970,16 +983,17 @@ Weighted forecast = each project's fee × its rating confidence, so a client's n
       STORE.setImpersonation(v);
     }
     // reset filters so a stale lead filter doesn't compound with the wall
-    filters = { search: '', status: '', industry: '', ptype: '', lead: '' };
+    filters = { ...EMPTY_FILTERS };
     $('#search-input').value = '';
     render();
   });
+  $('#filter-client')?.addEventListener('change', e => { filters.client = e.target.value; render(); });
   $('#filter-status')?.addEventListener('change', e => { filters.status = e.target.value; render(); });
   $('#filter-industry')?.addEventListener('change', e => { filters.industry = e.target.value; render(); });
   $('#filter-ptype')?.addEventListener('change', e => { filters.ptype = e.target.value; render(); });
   $('#filter-lead')?.addEventListener('change', e => { filters.lead = e.target.value; render(); });
   $('#clear-btn')?.addEventListener('click', () => {
-    filters = { search: '', status: '', industry: '', ptype: '', lead: '' };
+    filters = { ...EMPTY_FILTERS };
     $('#search-input').value = '';
     render();
   });

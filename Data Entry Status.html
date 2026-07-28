@@ -112,6 +112,13 @@
   const CATALOG = window.RATES_CATALOG;
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmtMoney = (n) => n ? '$' + Math.round(n).toLocaleString() : '—';
+  /* Resolved client label: prefer the real Client entity, fall back to the
+     legacy free-text string for projects not yet reconciled to a clientId. */
+  function clientLabel(p) {
+    const pj = p.project || {};
+    const c = pj.clientId ? STORE.clientById(pj.clientId) : null;
+    return (c && c.name) || pj.client || '—';
+  }
 
   let search = '';
   let onlyIncomplete = false;
@@ -147,7 +154,7 @@
 
     const fields = {
       Leader:   !!(pj.leadId || pj.lead),
-      Client:   !!(pj.client && String(pj.client).trim()),
+      Client:   !!(pj.clientId || (pj.client && String(pj.client).trim())),
       Industry: !!pj.industry,
       Type:     !!pj.projectType,
       Rating:   !!(STORE.ratingFor ? STORE.ratingFor(p) : pj.rating),
@@ -208,7 +215,7 @@
     let rows = all.map(p => ({ p, a: assess(p), imported: isImported(p) }));
     if (search) {
       const q = search.toLowerCase();
-      rows = rows.filter(r => (((r.p.project||{}).name||'') + ' ' + ((r.p.project||{}).client||'')).toLowerCase().includes(q));
+      rows = rows.filter(r => (((r.p.project||{}).name||'') + ' ' + clientLabel(r.p)).toLowerCase().includes(q));
     }
     if (onlyIncomplete) rows = rows.filter(r => r.a.missing.length > 0);
     if (onlyImported) rows = rows.filter(r => r.imported);
@@ -268,7 +275,7 @@
         const mc = r.a.missing.length;
         return `<tr>
           <td><a class="pj-name" href="Universal Fee Calculator.html?id=${esc(r.p.id)}">${esc(pj.name || 'Untitled')}</a>${r.imported?'<span class="imp-tag">Imported</span>':''}</td>
-          <td>${esc(pj.client || '—')}</td>
+          <td>${esc(clientLabel(r.p))}</td>
           <td>${esc((STORE.STATUS_LABELS && STORE.STATUS_LABELS[pj.status]) || pj.status || '—')}</td>
           ${chips}
           <td class="center"><span class="miss-n ${mc?'some':'zero'}">${mc || '✓'}</span></td>

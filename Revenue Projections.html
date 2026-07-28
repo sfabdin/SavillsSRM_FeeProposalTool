@@ -255,6 +255,14 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
     return '$' + (Math.abs(k) >= 100 ? Math.round(k) : k.toFixed(1)) + 'K';
   }
 
+  /* Resolved client label: prefer the real Client entity, fall back to the
+     legacy free-text string for projects not yet reconciled to a clientId. */
+  function clientLabel(p) {
+    const pj = p.project || {};
+    const c = pj.clientId ? STORE.clientById(pj.clientId) : null;
+    return (c && c.name) || pj.client || '—';
+  }
+
   let showExcluded = true;
   let showBroker = false;
   let showPass = false;
@@ -318,7 +326,7 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
       const ptCost = (fin && fin.passThroughCost) || 0;
       return { p, pj, rating: STORE.ratingFor(p), map, brokerMap, passMap, total, ov: p.monthlyOverrides || null,
                coCount: cos.length, feeSharePct, ptCost,
-               client: (pj.client || '').trim(), leaders, serviceLines, industry: (pj.industry || '').trim(), projectType: (pj.projectType || '').trim() };
+               client: clientLabel(p), leaders, serviceLines, industry: (pj.industry || '').trim(), projectType: (pj.projectType || '').trim() };
     });
     populateFilters();
   }
@@ -470,7 +478,7 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
         ? `<select class="rtag-edit r${r.rating}" data-pid="${r.p.id}" title="Projection rating">${STORE.RATINGS.map(rt => `<option value="${rt.n}" ${rt.n===r.rating?'selected':''}>${rt.n}</option>`).join('')}</select>`
         : `<span class="rtag r${r.rating}">${r.rating}</span>`;
       const coMeta = r.coCount ? ` · <span style="color:var(--sav-teal);">incl. ${r.coCount} CO${r.coCount === 1 ? '' : 's'}</span>` : '';
-      html += `<td class="proj-cell">${ratingCell}<a class="pname" href="Universal Fee Calculator.html?id=${encodeURIComponent(r.p.id)}" title="Open in the fee calculator">${esc(pj.name || 'Untitled')}</a><div class="pmeta">${esc(pj.client || '')}${pj.client && pj.status ? ' · ' : ''}${STORE.STATUS_LABELS[pj.status] || ''}${coMeta}<span class="open-link"> · open →</span></div></td>`;
+      html += `<td class="proj-cell">${ratingCell}<a class="pname" href="Universal Fee Calculator.html?id=${encodeURIComponent(r.p.id)}" title="Open in the fee calculator">${esc(pj.name || 'Untitled')}</a><div class="pmeta">${esc(r.client || '')}${r.client && pj.status ? ' · ' : ''}${STORE.STATUS_LABELS[pj.status] || ''}${coMeta}<span class="open-link"> · open →</span></div></td>`;
       let rvt = 0;
       cols.forEach((c, i) => {
         const v = r.map[c.key] || 0;
@@ -720,7 +728,7 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
       ws.getCell(r, 1).value = (pj.name || 'Untitled') + (row.coCount ? '  (incl. '+row.coCount+' CO'+(row.coCount===1?'':'s')+')' : '');
       ws.getCell(r, 1).font = { name:'Calibri', bold:true, size:11, color:{argb: excluded ? STEEL : NAVY} };
       ws.getCell(r, 1).alignment = { vertical:'middle' };
-      ws.getCell(r, 2).value = pj.client || '';
+      ws.getCell(r, 2).value = row.client || '';
       ws.getCell(r, 2).font = { name:'Calibri', size:10, color:{argb: excluded ? STEEL : NAVY} };
       ws.getCell(r, 3).value = row.rating + ' · ' + (meta.short || meta.label || '');
       ws.getCell(r, 3).font = { name:'Calibri', size:10, color:{argb: RCOL[row.rating] || NAVY}, bold:true };
@@ -852,7 +860,7 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
       return {
         projId: pj.projectId365 || pj.salesforceId || '',
         name: pj.name || 'Untitled',
-        client: pj.client || '',
+        client: clientLabel(p),
         rating: STORE.ratingFor(p),
         amount: monthRevenueFor(p, year, month),
       };
@@ -868,7 +876,7 @@ Off by default so the page reads as clean invoice revenue. Turn on to see what g
     const projects = STORE.visibleProjects(STORE.listProjects().filter(p => !STORE.isChangeOrder(p)));
     // Union of projects across live + all snapshots
     const live = {};
-    projects.forEach(p => { const pj = p.project || {}; live[p.id] = { projId: pj.projectId365 || '', name: pj.name || 'Untitled', client: pj.client || '', rating: STORE.ratingFor(p), amount: monthRevenueFor(p, year, month) }; });
+    projects.forEach(p => { const pj = p.project || {}; live[p.id] = { projId: pj.projectId365 || '', name: pj.name || 'Untitled', client: clientLabel(p), rating: STORE.ratingFor(p), amount: monthRevenueFor(p, year, month) }; });
     const ids = new Set(Object.keys(live));
     labels.forEach(l => { if (snaps[l]) Object.keys(snaps[l].rows).forEach(id => ids.add(id)); });
 

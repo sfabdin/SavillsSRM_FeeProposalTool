@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Savills SRM · Client Setup</title>
+<link rel="stylesheet" href="design-system/colors_and_type.css">
+<style>
+  body { margin:0; font-family:var(--font-body,Arial,sans-serif); color:var(--sav-navy,#25273A); background:#f3f3f0; }
+  .wrap { max-width:1100px; margin:0 auto; padding:36px 28px 80px; }
+  h1 { font-family:var(--font-display); font-weight:800; font-size:26px; margin:0 0 4px; }
+  .sub { color:#79828C; font-size:13px; margin-bottom:24px; }
+  .card { background:#fff; border:1px solid rgba(37,39,58,0.12); padding:22px 24px; margin-bottom:20px; }
+  .card h2 { font-family:var(--font-display); font-size:13px; letter-spacing:0.1em; text-transform:uppercase; margin:0 0 12px; }
+  .card .hint { color:#79828C; font-size:12px; margin:-8px 0 14px; line-height:1.5; }
+  .btn { font-family:var(--font-display); font-weight:700; font-size:13px; letter-spacing:0.04em; padding:11px 20px; border:0; cursor:pointer; background:var(--sav-navy); color:#fff; }
+  .btn.go { background:var(--sav-teal,#0E7C7B); }
+  .btn:disabled { opacity:0.4; cursor:not-allowed; }
+  input[type=file] { font-size:13px; }
+  input[type=text], input[type=number], select { font-size:13px; padding:8px 10px; border:1px solid rgba(37,39,58,0.25); font-family:inherit; }
+  table { width:100%; border-collapse:collapse; margin-top:14px; font-size:12px; }
+  th,td { text-align:left; padding:6px 9px; border-bottom:1px solid rgba(37,39,58,0.1); }
+  th { font-family:var(--font-display); font-size:9.5px; letter-spacing:0.07em; text-transform:uppercase; color:#79828C; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .msg { font-size:13px; padding:10px 14px; margin-top:12px; }
+  .msg.ok { background:#e8f3ec; color:#1f7a44; }
+  .msg.err { background:#fbe9ea; color:#b3151b; }
+  .note { font-size:12px; color:#79828C; line-height:1.6; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .row + .row { margin-top:10px; }
+  .two-up { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width: 760px) { .two-up { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Client Setup</h1>
+  <div id="dep-banner" style="display:none;background:#fbe9ea;color:#b3151b;padding:12px 16px;margin-bottom:16px;font-size:13px;"></div>
+  <div class="sub">One-time (re-runnable) seed for the Client → Work Order hierarchy — loads the real client roster and numbered work orders, then reconciles anything already in the system.</div>
+
+  <div class="two-up">
+    <div class="card">
+      <h2>1 · Client roster</h2>
+      <div class="hint">The client-level revenue forecast workbook (Customer / Jan–Dec / Total / PM).</div>
+      <input type="file" id="summary-file" accept=".xlsx,.xls">
+      <div id="summary-msg"></div>
+    </div>
+    <div class="card">
+      <h2>2 · Work orders</h2>
+      <div class="hint">The "by customer-project" workbook (Customer Name / Job Name / monthly $).</div>
+      <input type="file" id="jobs-file" accept=".xlsx,.xls">
+      <div id="jobs-msg"></div>
+    </div>
+  </div>
+
+  <div class="card" id="summary-preview-card" hidden>
+    <h2>Client roster preview</h2>
+    <div style="max-height:280px; overflow:auto;"><table id="summary-preview"></table></div>
+  </div>
+  <div class="card" id="jobs-preview-card" hidden>
+    <h2>Work order preview</h2>
+    <div style="max-height:280px; overflow:auto;"><table id="jobs-preview"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Commit seed</h2>
+    <div class="note">Idempotent — matches existing clients by name and existing work orders by client + name, so re-running with an updated workbook only adds what's new. Any client left with no work order (lump-sum clients — no job numbers) gets an auto "General" work order.</div>
+    <div class="row" style="margin-top:14px;">
+      <button class="btn go" id="seed-commit" disabled>Commit seed</button>
+    </div>
+    <div id="seed-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>4 · Add a lump-sum client by hand</h2>
+    <div class="hint">For clients billed as a flat monthly total with no numbered jobs (not covered by the two workbooks above) — creates the client and its "General" work order directly.</div>
+    <div class="row">
+      <input type="text" id="manual-name" placeholder="Client name">
+      <input type="text" id="manual-pm" placeholder="PM / revenue leader (optional)">
+      <input type="number" id="manual-total" placeholder="This month's $ (optional)">
+      <button class="btn" id="manual-add">Add client</button>
+    </div>
+    <div id="manual-msg"></div>
+  </div>
+
+  <div class="card" id="reconcile-card" hidden>
+    <h2>5 · Reconcile existing pipeline projects</h2>
+    <div class="hint">Live projects that predate this restructure and only carry the old free-text client field. Best-guess matches are pre-selected — review before applying.</div>
+    <div style="max-height:380px; overflow:auto;"><table id="reconcile-table"></table></div>
+    <div class="row" style="margin-top:14px;">
+      <button class="btn go" id="reconcile-apply">Apply</button>
+    </div>
+    <div id="reconcile-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>6 · Merge duplicate clients</h2>
+    <div class="hint">Reassigns every work order from one client to another and retires the duplicate (e.g. two spellings of the same company).</div>
+    <div class="row">
+      <select id="merge-loser"></select>
+      <span>→ merge into →</span>
+      <select id="merge-winner"></select>
+      <button class="btn" id="merge-go">Merge</button>
+    </div>
+    <div id="merge-msg"></div>
+  </div>
+</div>
+
+<script>
+  window.__xlsxStatus = 'pending';
+  function __xlsxLoaded(){ window.__xlsxStatus = (typeof XLSX !== 'undefined') ? 'ok' : 'fail'; var b=document.getElementById('dep-banner'); if(b){ if(window.__xlsxStatus==='ok'){ b.style.display='none'; } else { b.style.display='block'; b.textContent='⚠ Spreadsheet engine (SheetJS) failed to load from the CDN — your site may block it. Tell me and I will bundle it into the repo.'; } } }
+</script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onload="__xlsxLoaded()" onerror="document.getElementById('dep-banner').style.display='block';document.getElementById('dep-banner').textContent='⚠ Could not load the spreadsheet engine from the CDN (blocked or offline). Tell me and I will bundle it into the repo so no CDN is needed.';"></script>
+<script>if (typeof XLSX === 'undefined') { var s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=__xlsxLoaded; document.head.appendChild(s); } else { __xlsxLoaded(); }</script>
+<script src="universal-fee-calc/rates-catalog.js"></script>
+<script src="universal-fee-calc/store.js"></script>
+<script src="universal-fee-calc/staff.js"></script>
+<script src="universal-fee-calc/box-adapter.js"></script>
+<script src="universal-fee-calc/boot.js"></script>
+<script src="universal-fee-calc/sync-status.js"></script>
+<script src="universal-fee-calc/client-setup.js" onerror="document.getElementById('dep-banner').style.display='block';document.getElementById('dep-banner').innerHTML='⚠ client-setup.js did not load (404 / not deployed).';"></script>
+<script src="universal-fee-calc/nav.js"></script>
+</body>
+</html>

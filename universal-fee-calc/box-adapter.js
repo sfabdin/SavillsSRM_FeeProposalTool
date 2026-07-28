@@ -270,6 +270,7 @@
   // Download projects.json + capture its etag for concurrency.
   let _etag = null;
   let _remoteCount = 0;   // project count last seen in Box — drives the shrink guard
+  let _remoteClientCount = 0;   // client count last seen in Box — same shrink guard, for clients
   async function pullRemote() {
     const meta = await boxFetch('/files/' + BOX_CONFIG.dataFileId + '?fields=etag');
     if (meta.ok) { const m = await meta.json(); _etag = m.etag; }
@@ -279,6 +280,7 @@
     let db;
     try { db = JSON.parse(await res.text()); } catch (e) { db = Store.defaultDb(); }
     _remoteCount = Object.keys((db && db.projects) || {}).length;
+    _remoteClientCount = Object.keys((db && db.clients) || {}).length;
     return db;
   }
 
@@ -309,6 +311,10 @@
     const localCount = Object.keys((db && db.projects) || {}).length;
     if (!_forcePush && _remoteCount >= 10 && localCount < _remoteCount * 0.5) {
       throw new Error('Sync blocked to protect data: this browser has ' + localCount + ' projects but Box has ' + _remoteCount + '. Reload the page to re-sync first.');
+    }
+    const localClientCount = Object.keys((db && db.clients) || {}).length;
+    if (!_forcePush && _remoteClientCount >= 10 && localClientCount < _remoteClientCount * 0.5) {
+      throw new Error('Sync blocked to protect data: this browser has ' + localClientCount + ' clients but Box has ' + _remoteClientCount + '. Reload the page to re-sync first.');
     }
     const token = await ensureToken();
     if (!token) throw new Error('not authenticated');
@@ -344,6 +350,16 @@
       if (!rp || (lp.updatedAt || '') >= (rp.updatedAt || '')) all[id] = lp;
     });
     out.projects = all;
+    // Clients: same newest-updatedAt-wins-per-record strategy as projects
+    // (tombstones included, so a client merge/delete propagates). Rides inside
+    // this same document so a Work Order's clientId is never briefly stale
+    // against a separately-synced file.
+    const allClients = { ...(remote.clients || {}) };
+    Object.entries(local.clients || {}).forEach(([id, lc]) => {
+      const rc = allClients[id];
+      if (!rc || (lc.updatedAt || '') >= (rc.updatedAt || '')) allClients[id] = lc;
+    });
+    out.clients = allClients;
     // SRM free-entry leader directory: union by id so names entered on any
     // machine survive the merge.
     const lseen = {};

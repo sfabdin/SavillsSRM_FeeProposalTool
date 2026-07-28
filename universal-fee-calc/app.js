@@ -32,6 +32,7 @@
     project: {
       name: '',
       client: '',
+      clientId: '',
       lead: '',
       proposalDate: new Date().toISOString().slice(0,10),
       location: '',
@@ -817,7 +818,16 @@
   function renderProjectMeta() {
     const f = state.project;
     $('#pm-name').value = f.name;
-    $('#pm-client').value = f.client;
+    // Client dropdown from the Client directory (STORE.listClients()) — free-entry
+    // via "＋ Add client…", mirroring the Revenue Leaders pattern below.
+    const clientSel = $('#pm-client');
+    if (clientSel && clientSel.tagName === 'SELECT') {
+      clientSel.innerHTML = '<option value="">— select —</option>' +
+        STORE.listClients().map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('') +
+        '<option value="__add">＋ Add client…</option>';
+      const cl = STORE.resolveClient(f.clientId || f.client);
+      clientSel.value = cl ? cl.id : '';
+    }
     // Lead + relationship-owner dropdowns from the Revenue Leaders directory
     const leadOptsHtml = '<option value="">— select —</option>' +
       STORE.listLeaders().map(l => `<option value="${l.id}">${escapeHtml(l.displayName)}</option>`).join('') +
@@ -2456,9 +2466,18 @@
       $('#hdr-project').textContent = state.project.name || 'Untitled project';
       markDirty();
     });
-    $('#pm-client').addEventListener('input', e => {
-      state.project.client = e.target.value;
-      $('#hdr-client').textContent = e.target.value ? `for ${e.target.value}` : '';
+    $('#pm-client').addEventListener('change', e => {
+      let v = e.target.value;
+      if (v === '__add') {
+        const nm = prompt('New client — company name:');
+        const nc = (nm && nm.trim()) ? STORE.addClient(nm) : null;
+        v = nc ? nc.id : '';
+      }
+      const c = STORE.clientById(v);
+      state.project.clientId = c ? c.id : '';
+      state.project.client = c ? c.name : '';
+      $('#hdr-client').textContent = state.project.client ? `for ${state.project.client}` : '';
+      renderProjectMeta();
       markDirty();
     });
     $('#pm-lead').addEventListener('change',  e => {

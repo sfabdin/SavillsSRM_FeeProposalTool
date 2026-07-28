@@ -31,7 +31,7 @@
   <div class="sub">Asserts the invariants the reporting engines depend on. Run this before every deploy — a red row means the math or data layer broke. Uses an in-memory storage shim, so it never touches your real Box-synced data.</div>
   <div id="summary"></div>
   <div id="out"></div>
-  <div class="foot">Engine: <code>store.js · computeFinancials / monthlySeries / projectFinancials</code> + data-layer (<code>tombstones · migrations · activity</code>). No Box, no network — pure in-memory.</div>
+  <div class="foot">Engine: <code>store.js · computeFinancials / monthlySeries / projectFinancials</code> + data-layer (<code>tombstones · migrations · activity · clients</code>). No Box, no network — pure in-memory.</div>
 </div>
 
 <!-- In-memory storage shim: route the app's localStorage keys to memory so tests
@@ -258,24 +258,25 @@
     // backdate it and purge again
     const raw = S.allProjectsRaw();
     raw[p.id].deletedAt = '2000-01-01T00:00:00Z';
-    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: 2, projects: raw, activity: [] }));
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: raw, activity: [], clients: {} }));
     S.purgeTombstones(120);
     return !S.allProjectsRaw()[p.id] || 'old tombstone was not purged';
   });
 
   /* ============ DATA LAYER: migrations ============ */
 
-  test('Data · migrations', 'v1 db upgrades to current schema + gains activity[]', () => {
+  test('Data · migrations', 'v1 db upgrades to current schema + gains activity[] + clients{}', () => {
     localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: 1, projects: {} }));
     const bumped = S.runMigrations();
     if (bumped < 1) return 'runMigrations reported no upgrade';
     const db = JSON.parse(localStorage.getItem('savills-srm-fee-db:v1'));
-    if (db.schemaVersion !== 2) return 'schemaVersion not bumped to 2';
-    return Array.isArray(db.activity) || 'activity[] not created';
+    if (db.schemaVersion !== S.SCHEMA) return 'schemaVersion not bumped to ' + S.SCHEMA;
+    if (!Array.isArray(db.activity)) return 'activity[] not created';
+    return (db.clients && typeof db.clients === 'object') || 'clients{} not created';
   });
 
   test('Data · migrations', 'already-current db is a no-op', () => {
-    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: 2, projects: {}, activity: [] }));
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
     return S.runMigrations() === 0 || 'expected 0 migrations on current db';
   });
 
@@ -283,7 +284,7 @@
 
   test('Data · activity', 'create + delete are logged', () => {
     // reset to a clean db
-    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: 2, projects: {}, activity: [] }));
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
     const p = base(); delete p.id;   // a real new project has no id until first save
     const saved = S.saveProject(p);
     S.deleteProject(saved.id);
@@ -293,12 +294,68 @@
   });
 
   test('Data · activity', 'status change logs book on won', () => {
-    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: 2, projects: {}, activity: [] }));
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
     const p = S.saveProject(base());
     p.project.status = 'won';
     S.saveProject(p);
     const acts = S.listActivity(null, p.id).map(a => a.action);
     return acts.includes('book') || 'expected a book entry on won status';
+  });
+
+  /* ============ DATA LAYER: clients ============ */
+
+  test('Data · clients', 'addClient is idempotent — re-adding the same name returns the existing record', () => {
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
+    const a = S.addClient('Acme Corp');
+    const b = S.addClient('Acme Corp');
+    if (!a || !b) return 'addClient returned null';
+    if (a.id !== b.id) return 'second addClient created a duplicate';
+    return S.listClients().length === 1 || 'expected exactly one client';
+  });
+
+  test('Data · clients', 'resolveClient matches by id, name, and alias', () => {
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
+    const c = S.saveClient({ name: 'Beta LLC', aliases: ['Beta Industries'] });
+    if (!S.resolveClient(c.id) || S.resolveClient(c.id).id !== c.id) return 'id resolve failed';
+    if (!S.resolveClient('beta llc')) return 'case-insensitive name resolve failed';
+    return !!S.resolveClient('Beta Industries') || 'alias resolve failed';
+  });
+
+  test('Data · clients', 'saveProject with clientId is found by clientRollup grouped under that client', () => {
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
+    const c = S.addClient('Gamma Inc');
+    const p = base({ project: { name: 'Gamma job', client: 'Gamma Inc', clientId: c.id, status: 'draft' } });
+    S.saveProject(p);
+    const rollup = S.clientRollup();
+    const row = rollup.find(r => r.clientId === c.id);
+    if (!row) return 'no rollup row for the new client';
+    return row.projects === 1 || 'expected 1 project under the client';
+  });
+
+  test('Data · clients', 'mergeClientInto reassigns projects and tombstones the loser', () => {
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
+    const winner = S.addClient('Delta Co');
+    const loser = S.addClient('Delta Company');
+    const p = S.saveProject(base({ project: { name: 'Delta job', client: 'Delta Company', clientId: loser.id, status: 'draft' } }));
+    const res = S.mergeClientInto(loser.id, winner.id);
+    if (!res || !res.ok) return 'mergeClientInto failed: ' + (res && res.error);
+    if (res.movedCount !== 1) return 'expected 1 project moved';
+    const moved = S.getProject(p.id);
+    if (moved.project.clientId !== winner.id) return 'project not reassigned to winner';
+    const stillListed = S.listClients().some(c => c.id === loser.id);
+    return !stillListed || 'loser client still appears in listClients after merge';
+  });
+
+  test('Data · clients', 'ensureDefaultWorkOrder is idempotent — no-op if the client already has a Work Order', () => {
+    localStorage.setItem('savills-srm-fee-db:v1', JSON.stringify({ schemaVersion: S.SCHEMA, projects: {}, activity: [], clients: {} }));
+    const c = S.addClient('Epsilon Partners');
+    const first = S.ensureDefaultWorkOrder(c.id);
+    if (!first) return 'expected a Work Order to be created';
+    const countAfterFirst = S.listProjects().filter(p => p.project && p.project.clientId === c.id).length;
+    const second = S.ensureDefaultWorkOrder(c.id);
+    if (second !== null) return 'expected no-op (null) on second call';
+    const countAfterSecond = S.listProjects().filter(p => p.project && p.project.clientId === c.id).length;
+    return countAfterFirst === countAfterSecond || 'a second Work Order was created';
   });
 
   /* ---- render ---- */

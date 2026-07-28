@@ -527,10 +527,17 @@
       };
     });
 
+    // Resolve the typed client name to a real Client entity (creating one if
+    // it doesn't exist yet — same free-entry convention as the calculator's
+    // "＋ Add client…" picker), so every ingested Work Order carries a clientId.
+    const clientName = (p.client || '').trim();
+    const client = clientName ? (STORE.resolveClient(clientName) || STORE.addClient(clientName)) : null;
+
     const record = {
       project: {
         name: p.name || 'Ingested project',
-        client: p.client || '',
+        client: client ? client.name : (p.client || ''),
+        clientId: client ? client.id : '',
         lead: '',
         proposalDate: new Date().toISOString().slice(0,10),
         location: '',

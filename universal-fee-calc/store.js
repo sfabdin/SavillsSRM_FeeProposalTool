@@ -6,7 +6,7 @@
   'use strict';
   const KEY = 'savills-srm-fee-db:v1';
   const STUDIO_KEY = 'savills-srm-studio-db:v1';   // Revenue Studio — SEPARATE store/file
-  const SCHEMA = 2;
+  const SCHEMA = 3;
 
   const STATUSES = ['draft','submitted','negotiation','won','lost','active','closed','hold'];
   const STATUS_LABELS = {
@@ -147,7 +147,7 @@
   }
 
   function defaultDb() {
-    return { schemaVersion: SCHEMA, projects: {}, activity: [], leaders: [] };
+    return { schemaVersion: SCHEMA, projects: {}, activity: [], leaders: [], clients: {} };
   }
 
   /* ===== Schema migration pipeline =====
@@ -156,6 +156,10 @@
      this just normalizes shape and stamps the version. Runs once at boot. */
   const MIGRATIONS = {
     2: (db) => { if (!Array.isArray(db.activity)) db.activity = []; },
+    // Client entity (Client -> Work Order restructure). Existing projects keep
+    // project.clientId undefined — read sites default it; a separate admin-run
+    // seed/reconciliation pass (not this migration) backfills real clientIds.
+    3: (db) => { if (!db.clients || typeof db.clients !== 'object') db.clients = {}; },
   };
   function runMigrations() {
     const raw = localStorage.getItem(KEY);
@@ -178,6 +182,7 @@
       if (!raw) return defaultDb();
       const parsed = JSON.parse(raw);
       if (!parsed.projects) return defaultDb();
+      if (!parsed.clients || typeof parsed.clients !== 'object') parsed.clients = {};
       return parsed;
     } catch (e) {
       console.error('DB read failed', e);
@@ -241,6 +246,7 @@
   function hydrateFromRemote(db) {
     if (!db || !db.projects) return;
     db.schemaVersion = SCHEMA;
+    if (!db.clients || typeof db.clients !== 'object') db.clients = {};
     try { syncLeadersFrom(db); } catch (e) {}
     localStorage.setItem(KEY, JSON.stringify(db));
   }
@@ -679,6 +685,7 @@
       if (localCount > 0 && inCount === 0) throw new Error('Refusing to replace ' + localCount + ' project(s) with an empty file. Use merge, or delete projects individually.');
       // Preserve the audit trail across a replace.
       incoming.activity = [...(db.activity || []), ...(incoming.activity || [])].slice(-500);
+      if (!incoming.clients || typeof incoming.clients !== 'object') incoming.clients = db.clients || {};
       writeDb(incoming);
       return inCount;
     }
@@ -687,6 +694,10 @@
     Object.entries(incoming.projects).forEach(([id, ip]) => {
       const cur = db.projects[id];
       if (!cur || ((ip && ip.updatedAt) || '') >= (cur.updatedAt || '')) db.projects[id] = ip;
+    });
+    Object.entries(incoming.clients || {}).forEach(([id, ic]) => {
+      const cur = db.clients[id];
+      if (!cur || ((ic && ic.updatedAt) || '') >= (cur.updatedAt || '')) db.clients[id] = ic;
     });
     writeDb(db);
     return inCount;
@@ -1264,12 +1275,20 @@
   }
 
   /** Roll up projects by client: contract + revised + CO count. Parents only
-      (COs fold into their parent's revised total). */
+      (COs fold into their parent's revised total). Groups by the real
+      clientId when a project has one; falls back to the legacy free-text
+      client string for records not yet reconciled to a Client entity, so
+      the rollup stays correct through the migration rather than dumping
+      un-migrated projects into a single bucket. */
   function clientRollup(projects, feeOf) {
     const list = (projects || listProjects()).filter(p => !isChangeOrder(p));
+    const clientsById = readDb().clients || {};
     const byClient = {};
     list.forEach(p => {
-      const c = (p.project && p.project.client) || '—';
+      const cid = p.project && p.project.clientId;
+      const client = (cid && clientsById[cid] && !clientsById[cid]._deleted) ? clientsById[cid] : null;
+      const key = client ? 'id:' + client.id : 'name:' + ((p.project && p.project.client) || '—');
+      const label = client ? client.name : ((p.project && p.project.client) || '—');
       const rc = revisedContract(p.id);
       // Baseline net = frozen snapshot if present, else compute live via the
       // supplied resolver (handles imported-by-month + never-booked projects,
@@ -1277,7 +1296,7 @@
       let baseline = (p.financials && p.financials.net);
       if (!baseline && typeof feeOf === 'function') { try { baseline = feeOf(p); } catch (e) {} }
       baseline = baseline || 0;
-      const b = byClient[c] || (byClient[c] = { client: c, projects: 0, baseline: 0, revised: 0, coCount: 0 });
+      const b = byClient[key] || (byClient[key] = { clientId: client ? client.id : null, client: label, projects: 0, baseline: 0, revised: 0, coCount: 0 });
       b.projects++;
       b.baseline += baseline;
       b.revised += baseline + (rc.coNetSum || 0);
@@ -1674,6 +1693,115 @@
   }
   function leaderDisplay(value) { const l = resolveLeader(value); return l ? l.displayName : (value || ''); }
 
+  /* ============================================================
+     CLIENTS — top of the Client → Work Order hierarchy.
+     ------------------------------------------------------------
+     A real entity (replaces the free-text project.client string):
+     every project ("Work Order") carries a project.clientId FK.
+     Stored inline as db.clients so it rides the same projects.json
+     document, Box merge, backup, and shrink-guard machinery as
+     everything else — no second file that can go stale against it.
+     The legacy project.client string is kept in parallel as a
+     non-authoritative display/search fallback during the transition.
+     ============================================================ */
+  function listClients() {
+    const db = readDb();
+    return Object.values(db.clients || {}).filter(c => !c._deleted)
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  function getClient(id) {
+    const db = readDb();
+    const c = id && db.clients && db.clients[id];
+    return (c && !c._deleted) ? c : null;
+  }
+  function clientById(id) { return getClient(id); }
+
+  function saveClient(record) {
+    const db = readDb();
+    if (!db.clients) db.clients = {};
+    if (!record.id) record.id = 'client_' + Math.random().toString(36).slice(2, 11);
+    if (!record.createdAt) record.createdAt = new Date().toISOString();
+    record.updatedAt = new Date().toISOString();
+    if (!Array.isArray(record.aliases)) record.aliases = [];
+    if (!record.status) record.status = 'active';
+    db.clients[record.id] = record;
+    writeDb(db);
+    return record;
+  }
+
+  /** Resolve any stored value (id, canonical name, or alias) to a client. */
+  function resolveClient(value) {
+    if (!value) return null;
+    const v = String(value).trim();
+    const vk = v.toLowerCase();
+    const db = readDb();
+    return Object.values(db.clients || {}).find(c => !c._deleted && (
+      c.id === v ||
+      (c.name || '').trim().toLowerCase() === vk ||
+      (c.aliases || []).some(a => (a || '').trim().toLowerCase() === vk)
+    )) || null;
+  }
+  function clientDisplay(value) { const c = resolveClient(value); return c ? c.name : (value || ''); }
+
+  /** Free-entry: add a client by name (idempotent — an existing match is
+      returned, not duplicated). Mirrors addLeader()'s "＋ Add …" UI pattern. */
+  function addClient(name, pmId) {
+    const nm = String(name || '').trim();
+    if (!nm) return null;
+    const existing = resolveClient(nm);
+    if (existing) return existing;
+    const pm = pmId ? leaderById(pmId) : null;
+    return saveClient({ name: nm, pmId: pm ? pm.id : '', pm: pm ? pm.displayName : '' });
+  }
+
+  /** Merge one client into another: reassign every project's clientId to the
+      winner, union aliases (incl. the loser's name, for old-string matching),
+      tombstone the loser. Used to clean up near-duplicates from free-entry /
+      fuzzy-matched seeding (e.g. two spellings of the same company). */
+  function mergeClientInto(loserId, winnerId) {
+    if (!loserId || !winnerId || loserId === winnerId) return { error: 'Pick two different clients.' };
+    const db = readDb();
+    const loser = db.clients && db.clients[loserId];
+    const winner = db.clients && db.clients[winnerId];
+    if (!loser || !winner) return { error: 'Client not found.' };
+    const now = new Date().toISOString();
+    let moved = 0;
+    Object.values(db.projects || {}).forEach(p => {
+      if (p && !p._deleted && p.project && p.project.clientId === loserId) {
+        p.project.clientId = winnerId;
+        p.updatedAt = now;
+        moved++;
+      }
+    });
+    const aliasSet = new Set([...(winner.aliases || []), ...(loser.aliases || []), loser.name]);
+    winner.aliases = [...aliasSet].filter(a => a && a.toLowerCase() !== (winner.name || '').toLowerCase());
+    winner.updatedAt = now;
+    db.clients[loserId] = { id: loserId, _deleted: true, deletedAt: now, updatedAt: now, name: loser.name, mergedInto: winnerId };
+    writeDb(db);
+    try { logActivity('client-merge', null, { loserId, loserName: loser.name, winnerId, winnerName: winner.name, projectsMoved: moved }); } catch (e) {}
+    return { ok: true, winner, movedCount: moved };
+  }
+
+  /** Invariant: every client has ≥1 Work Order. Idempotent no-op if the client
+      already has one; otherwise creates a minimal draft "General" Work Order —
+      the landing spot for lump-sum clients (no numbered jobs) and for staffing
+      allocations on a not-yet-priced pursuit. Used by the seed importer and by
+      any future "create client" flow, so this invariant is enforced in one place. */
+  function ensureDefaultWorkOrder(clientId) {
+    const client = getClient(clientId);
+    if (!client) return null;
+    const already = listProjects().some(p => p.project && p.project.clientId === clientId);
+    if (already) return null;
+    return saveProject({
+      project: {
+        name: client.name + ' — General', client: client.name, clientId,
+        lead: client.pm || '', leadId: client.pmId || '',
+        status: 'draft',
+      },
+      timeline: {}, phases: [], groups: [], roles: [], assumptions: {},
+    });
+  }
+
   /* The TRUE signed-in identity for this session (set once at boot from Box SSO).
      Kept in-memory + a localStorage mirror so page navigations preserve it. */
   let _realIdentity = null;
@@ -1822,6 +1950,8 @@
     getCurrentUser, setCurrentUser, isAdmin, userOwnsProject, visibleProjects,
     setRealIdentity, getRealIdentity, canImpersonate, setImpersonation, clearImpersonation, getImpersonation, roleFor, impersonationRoster,
     REVENUE_LEADERS, listLeaders, addLeader, leaderById, resolveLeader, leaderDisplay,
+    listClients, getClient, clientById, saveClient, resolveClient, clientDisplay, addClient,
+    mergeClientInto, ensureDefaultWorkOrder,
     attachRemote, hydrateFromRemote, defaultDb, runMigrations,
     attachStudioRemote, hydrateStudioFromRemote, readStudio, defaultStudio,
     listBaselines, getBaseline, saveBaseline, deleteBaseline, baselineFromBudget, baselineGridForSlice,
