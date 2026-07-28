@@ -171,7 +171,12 @@
         const name = (row[0] || '').toString().trim();
         const amt = parseFloat(row[1]);
         if (!name || !isFinite(amt) || /client/i.test(name) || /total/i.test(name)) return;
-        clientAnnual[name] = (clientAnnual[name] || 0) + amt;
+        // Key by the canonical Client name when the pasted name resolves to a
+        // real client, so this baseline aligns with the live rollup's
+        // (also-canonical) client keys instead of drifting on spelling.
+        const resolved = STORE.resolveClient(name);
+        const key = resolved ? resolved.name : name;
+        clientAnnual[key] = (clientAnnual[key] || 0) + amt;
       });
       const n = Object.keys(clientAnnual).length;
       if (!n) { alert('No client rows found. Expected Client in column A, annual $ in column B.'); return; }
@@ -202,7 +207,7 @@
         ptMarkup: (p.financials && p.financials.passThroughMarkup) || 0,
         rating: STORE.ratingFor(p),
         isNew: isFinite(cutoff) && isFinite(created) && created > cutoff,
-        client: (pj.client || '—').trim() || '—',
+        client: ((pj.clientId && (STORE.clientById(pj.clientId) || {}).name) || pj.client || '—').trim() || '—',
         leader: leader ? leader.displayName : (pj.lead || '—'),
         industry: (pj.industry || '—').trim() || '—',
         serviceLine: (STORE.projectServiceLines(p)[0] || '—'),

@@ -63,7 +63,7 @@
       return {
         p, id: p.id,
         name: pj.name || '(untitled)',
-        client: pj.client || '—',
+        client: (pj.clientId && (STORE.clientById(pj.clientId) || {}).name) || pj.client || '—',
         leader: leader ? leader.displayName : '—',
         industry: pj.industry || '—',
         ptype: pj.projectType || '—',

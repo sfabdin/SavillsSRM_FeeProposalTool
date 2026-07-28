@@ -54,7 +54,8 @@
       const rep = STORE.reconcileToGrid(p, newCat);
       reports[p.id] = rep;
       const name = esc(p.project?.name || 'Untitled');
-      const client = esc(p.project?.client || '');
+      const clientEnt = p.project?.clientId ? STORE.clientById(p.project.clientId) : null;
+      const client = esc((clientEnt && clientEnt.name) || p.project?.client || '');
       if (rep.status !== 'ok') {
         skipCount++;
         rowsHtml.push(`<tr class="proj-row skip"><td>${name}</td><td>${client}</td><td colspan="4" class="note">${esc(rep.reason || 'skipped')}</td><td><span class="pill skip">skip</span></td></tr>`);
