@@ -194,6 +194,14 @@
     }
     a.updatedAt = new Date().toISOString();
     try { const u = window.UFC_Store && window.UFC_Store.getCurrentUser(); if (u && u.username) a.updatedBy = u.username; } catch (e) {}
+    // Best-effort link to a real fee-tool Work Order (and its Client) so
+    // downstream views (Profitability) can use a real FK instead of re-running
+    // fuzzy name matching every render. Free-text project/client stay the
+    // source of truth for the UI's autocomplete — this is a derived link,
+    // re-resolved on every save so it tracks renames.
+    const link = matchFeeProject(a.project, a.client);
+    a.workOrderId = link ? link.id : null;
+    a.clientId = (link && link.clientId) || null;
     if (!a.id) { a.id = 'al_' + Math.random().toString(36).slice(2, 9); db.allocations.push(a); }
     else { const i = db.allocations.findIndex(x => x.id === a.id); if (i >= 0) db.allocations[i] = a; else db.allocations.push(a); }
     writeDb(db); return a;
@@ -276,12 +284,15 @@
       if (a.client) b.client = a.client;
       months.forEach(ym => { if (allocActiveIn(a, ym)) b.byMonth[ym] = (b.byMonth[ym] || 0) + (a.pct || 0) / 100; });
     });
-    return Object.values(byProj).map(b => ({
-      project: b.project, client: b.client, headcount: b.people.size,
-      peakFte: Math.max(0, ...months.map(m => b.byMonth[m] || 0)),
-      byMonth: b.byMonth, allocs: b.allocs,
-      feeProject: matchFeeProject(b.project, b.client),
-    })).sort((a, b) => a.project.localeCompare(b.project));
+    return Object.values(byProj).map(b => {
+      const feeProject = matchFeeProject(b.project, b.client);
+      return {
+        project: b.project, client: b.client, headcount: b.people.size,
+        peakFte: Math.max(0, ...months.map(m => b.byMonth[m] || 0)),
+        byMonth: b.byMonth, allocs: b.allocs,
+        feeProject, workOrderId: feeProject ? feeProject.id : null, clientId: (feeProject && feeProject.clientId) || null,
+      };
+    }).sort((a, b) => a.project.localeCompare(b.project));
   }
 
   /** Best-effort match of a matrix project name to a fee-tool project. */
@@ -297,8 +308,11 @@
     if (_feeIndex) return _feeIndex;
     _feeIndex = feeRecords().map(p => {
       const name = (p.project && p.project.name) || '';
-      const client = (p.project && p.project.client) || '';
-      return { id: p.id, name, client, label: client ? client + ' — ' + name : name, key: projKey(name) };
+      const S2 = window.UFC_Store;
+      const clientId = (p.project && p.project.clientId) || '';
+      const clientEnt = (clientId && S2 && S2.clientById) ? S2.clientById(clientId) : null;
+      const client = (clientEnt && clientEnt.name) || (p.project && p.project.client) || '';
+      return { id: p.id, name, client, clientId, label: client ? client + ' — ' + name : name, key: projKey(name) };
     });
     return _feeIndex;
   }
@@ -329,7 +343,7 @@
     // 0) saved manual link wins
     const feeMap = (readDb().mappings || {}).fee || {};
     const mapped = feeMap[nkey(name)];
-    if (mapped) { const hit = feeIndex().find(p => p.id === mapped); if (hit) return { id: hit.id, name: hit.name, client: hit.client, via: 'mapped' }; }
+    if (mapped) { const hit = feeIndex().find(p => p.id === mapped); if (hit) return { id: hit.id, name: hit.name, client: hit.client, clientId: hit.clientId, via: 'mapped' }; }
     const idx = feeIndex();
     // prefer same-client candidates when a client is given and names collide
     const byClient = (list) => {
@@ -339,14 +353,14 @@
     };
     // 1) exact normalized name
     let hits = idx.filter(p => p.key === k);
-    if (hits.length) { const h = byClient(hits); return { id: h.id, name: h.name, client: h.client, via: 'name' }; }
+    if (hits.length) { const h = byClient(hits); return { id: h.id, name: h.name, client: h.client, clientId: h.clientId, via: 'name' }; }
     // 2) containment (old behavior, kept for tight names)
     hits = idx.filter(p => p.key && (p.key.includes(k) || k.includes(p.key)) && Math.abs(p.key.length - k.length) < 8);
-    if (hits.length) { const h = byClient(hits); return { id: h.id, name: h.name, client: h.client, via: 'name' }; }
+    if (hits.length) { const h = byClient(hits); return { id: h.id, name: h.name, client: h.client, clientId: h.clientId, via: 'name' }; }
     // 3) token scoring — best fee project sharing ≥70% of significant words
     let best = null, bestScore = 0;
     idx.forEach(p => { let s = tokenScore(name, p.name); if (client && p.client) s = s * 0.8 + tokenScore(client, p.client) * 0.2; if (s > bestScore) { bestScore = s; best = p; } });
-    if (best && bestScore >= 0.7) return { id: best.id, name: best.name, client: best.client, via: 'tokens', score: Math.round(bestScore * 100) };
+    if (best && bestScore >= 0.7) return { id: best.id, name: best.name, client: best.client, clientId: best.clientId, via: 'tokens', score: Math.round(bestScore * 100) };
     return null;
   }
 
@@ -732,8 +746,11 @@
       } catch (e) {}
       const b = burnByFee[p.id];
       if (!revTotal && !b) return;                       // nothing in-window on either axis
+      const clientEnt = (p.project && p.project.clientId) ? S2.clientById(p.project.clientId) : null;
       rows.push({
-        key: 'fee:' + p.id, feeId: p.id, project: (p.project && p.project.name) || p.name || '(unnamed)', client: (p.project && p.project.client) || p.client || '', rating,
+        key: 'fee:' + p.id, feeId: p.id, project: (p.project && p.project.name) || p.name || '(unnamed)',
+        client: (clientEnt && clientEnt.name) || (p.project && p.project.client) || p.client || '',
+        clientId: (p.project && p.project.clientId) || null, rating,
         included: rating >= 1 && rating <= 4, booked: rating === 1,
         revByMonth, revTotal: Math.round(revTotal),
         costByMonth: b ? b.byMonth : {}, cost: Math.round(b ? b.cost : 0), hours: b ? Math.round(b.hours * 10) / 10 : 0,
